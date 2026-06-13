@@ -21,7 +21,21 @@ There are no automated tests in this project.
 
 ## Architecture
 
-Almost all app code lives in one file: `app/src/main/java/com/example/riverdischarge/MainActivity.kt` (~1900 lines). The only other source file is `ui/theme/Theme.kt`, which defines `RiverDischargeTheme` (Material You dynamic color on Android 12+, with a hand-tuned blue/teal "river" fallback for older devices and a dark variant). There is no multi-module setup, no ViewModel, and no navigation library — all state is plain Compose `remember`/`mutableStateOf` held in `RiverDischargeApp`.
+The app is a single module, single package (`com.example.riverdischarge`), split into focused source files by layer. There is no multi-module setup, no ViewModel, and no navigation library — all state is plain Compose `remember`/`mutableStateOf` held in `RiverDischargeApp`. Because everything shares one package, declarations are visible across files without imports; cross-file top-level helpers are `internal` (file-private `private` only stays for things used within a single file). Each `.kt` file currently carries the full shared import block (harmless unused-import warnings) — run "Optimize Imports" if trimming is wanted.
+
+**Source files:**
+
+- `MainActivity.kt` — the `MainActivity` Activity, `RiverDischargeApp` root (holds all state, switches `HomeScreen` ↔ `EditorScreen`), `HomeScreen`/`SurveyCard`, and `EditorScreen` with its `NavigationBar`.
+- `Model.kt` — all enums (`BankSide`, `BankType`, `VelocityPoint`, `MeasurementMethod`), `*Input` types, parsed/domain types, `ParseState`, `LocalDepthPreview`.
+- `EditorSteps.kt` — the five tab composables (`PassportStep`, `SectionStep`, `VelocityStep`, `BanksStep`, `ResultStep`) plus their sub-editors (`BankSelector`, `SectionPointEditor`, `VelocityEditorCard`).
+- `Charts.kt` — canvas drawings: `SectionProfileCard` (cross-section) and the velocity эпюры (`VelocityProfilesCard`/`VelocityProfileChart`, `buildEpureProfile`, `smoothPathThrough`).
+- `Components.kt` — generic UI bits (`SimpleDataTable`, `TableRow`, `SegmentCard`, `MetricRow`, `EmptyCard`, `InfoCard`, `ErrorCard`).
+- `Parsing.kt` — `validatePassport`, `parseSection`, `previewLocalDepth`, `parseVelocityStage`, `parseBanks`, `parseSurvey`.
+- `Calculation.kt` — `calculateDischarge`, `depthAt`, `integrateArea`.
+- `ClipboardExport.kt` — `copyTextToClipboard` and the `build*ClipboardText` / `buildFullClipboardExport` helpers.
+- `SurveyStorage.kt` — `SurveyStorage` object + `SurveyDraft.toJson()` / `JSONObject.toSurveyDraft()`.
+- `Util.kt` — small shared helpers (`parseFlexibleDouble`, `parseNullableDouble`, `formatNumber`, `todayText`, `ParseState.getOrNull`/`errorOrNull`, list-replace extensions).
+- `ui/theme/Theme.kt` — `RiverDischargeTheme` (Material You dynamic color on Android 12+, with a hand-tuned blue/teal "river" fallback for older devices and a dark variant).
 
 **Data model layers:**
 
@@ -46,7 +60,7 @@ Almost all app code lives in one file: `app/src/main/java/com/example/riverdisch
 - The shore segments use a bank coefficient × the nearest vertical's velocity; interior segments average adjacent verticals.
 - Three-point velocity: `(v02 + 2·v06 + v08) / 4`.
 
-**Persistence:** `SurveyStorage` (bottom of the file) serialises surveys to `SharedPreferences` as a JSON array. `SurveyDraft.toJson()` / `JSONObject.toSurveyDraft()` are the serialisation helpers. Surveys are sorted descending by `updatedAt`.
+**Persistence:** `SurveyStorage` (in `SurveyStorage.kt`) serialises surveys to `SharedPreferences` as a JSON array. `SurveyDraft.toJson()` / `JSONObject.toSurveyDraft()` are the serialisation helpers. Surveys are sorted descending by `updatedAt`.
 
 **Clipboard export:** `buildFullClipboardExport` and its siblings produce tab-separated text ready to paste into Excel/Google Sheets.
 
