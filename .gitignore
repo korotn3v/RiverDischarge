@@ -1,0 +1,7 @@
+.gradle/
+local.properties
+app/build/
+build/
+.idea/
+*.iml
+.claude/settings.local.json
