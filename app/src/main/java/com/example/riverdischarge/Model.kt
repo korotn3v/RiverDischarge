@@ -86,6 +86,7 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.serialization.Serializable
 
 enum class BankSide(val title: String) {
     LEFT("Левый берег"),
@@ -140,12 +141,14 @@ enum class MeasurementMethod(val title: String, val points: List<VelocityPoint>)
     }
 }
 
+@Serializable
 data class SectionPointInput(
     val id: String = UUID.randomUUID().toString(),
     val distanceText: String = "",
     val depthText: String = ""
 )
 
+@Serializable
 data class VelocityVerticalInput(
     val id: String = UUID.randomUUID().toString(),
     val distanceText: String = "",
@@ -185,6 +188,7 @@ data class VelocityVerticalInput(
     }
 }
 
+@Serializable
 data class SurveyDraft(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "",
@@ -201,6 +205,7 @@ data class SurveyDraft(
     val rightBankCoefficientText: String = formatNumber(BankType.STEEP_OR_ROUGH.defaultCoefficient)
 )
 
+@Serializable
 data class SavedSurvey(
     val id: String,
     val createdAt: Long,

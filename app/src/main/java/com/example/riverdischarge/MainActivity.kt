@@ -57,6 +57,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -107,7 +108,8 @@ fun RiverDischargeApp() {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    var surveys by remember { mutableStateOf(SurveyStorage.load(context)) }
+    val repository = remember { DataStoreSurveyRepository(context) }
+    val surveys by repository.surveys.collectAsState(initial = emptyList())
     var currentDraft by remember { mutableStateOf<SurveyDraft?>(null) }
     var currentTab by remember { mutableStateOf(0) }
 
@@ -124,8 +126,7 @@ fun RiverDischargeApp() {
                 currentTab = 0
             },
             onDeleteSurvey = { survey ->
-                SurveyStorage.delete(context, survey.id)
-                surveys = SurveyStorage.load(context)
+                scope.launch { repository.delete(survey.id) }
             }
         )
     } else {
@@ -173,8 +174,7 @@ fun RiverDischargeApp() {
                         updatedAt = stamp,
                         draft = draft
                     )
-                    SurveyStorage.save(context, toSave)
-                    surveys = SurveyStorage.load(context)
+                    scope.launch { repository.save(toSave) }
                     currentDraft = null
                     currentTab = 0
                     scope.launch { snackbarHostState.showSnackbar("Замер сохранён") }

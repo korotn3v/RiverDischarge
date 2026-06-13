@@ -33,7 +33,7 @@ The app is a single module, single package (`com.example.riverdischarge`), split
 - `Parsing.kt` — `validatePassport`, `parseSection`, `previewLocalDepth`, `parseVelocityStage`, `parseBanks`, `parseSurvey`.
 - `Calculation.kt` — `calculateDischarge`, `depthAt`, `integrateArea`.
 - `ClipboardExport.kt` — `copyTextToClipboard` and the `build*ClipboardText` / `buildFullClipboardExport` helpers.
-- `SurveyStorage.kt` — `SurveyStorage` object + `SurveyDraft.toJson()` / `JSONObject.toSurveyDraft()`.
+- `SurveyRepository.kt` — `SurveyRepository` interface + `DataStoreSurveyRepository` (Preferences DataStore + `kotlinx.serialization`), plus a one-time migration from the legacy SharedPreferences blob.
 - `Util.kt` — small shared helpers (`parseFlexibleDouble`, `parseNullableDouble`, `formatNumber`, `todayText`, `ParseState.getOrNull`/`errorOrNull`, list-replace extensions).
 - `ui/theme/Theme.kt` — `RiverDischargeTheme` (Material You dynamic color on Android 12+, with a hand-tuned blue/teal "river" fallback for older devices and a dark variant).
 
@@ -60,7 +60,7 @@ The app is a single module, single package (`com.example.riverdischarge`), split
 - The shore segments use a bank coefficient × the nearest vertical's velocity; interior segments average adjacent verticals.
 - Three-point velocity: `(v02 + 2·v06 + v08) / 4`.
 
-**Persistence:** `SurveyStorage` (in `SurveyStorage.kt`) serialises surveys to `SharedPreferences` as a JSON array. `SurveyDraft.toJson()` / `JSONObject.toSurveyDraft()` are the serialisation helpers. Surveys are sorted descending by `updatedAt`.
+**Persistence:** `SurveyRepository` (in `SurveyRepository.kt`) is the storage layer behind a swappable interface; the UI holds a `DataStoreSurveyRepository` and never touches storage directly. Surveys are kept as one `kotlinx.serialization` JSON string in **Preferences DataStore**, exposed as a reactive `Flow<List<SavedSurvey>>` (`collectAsState` in `RiverDischargeApp`), with `suspend save`/`delete` run on a coroutine scope — so the list refreshes without manual reloads and there is no main-thread I/O. The persisted types (`SurveyDraft`, `SectionPointInput`, `VelocityVerticalInput`, `SavedSurvey`) are `@Serializable`; the input layer (raw typed strings) is stored, never the computed values. A `DataMigration` copies the legacy SharedPreferences blob (`river_discharge_surveys`) into DataStore once on first run. Surveys are sorted descending by `updatedAt`.
 
 **Clipboard export:** `buildFullClipboardExport` and its siblings produce tab-separated text ready to paste into Excel/Google Sheets.
 
