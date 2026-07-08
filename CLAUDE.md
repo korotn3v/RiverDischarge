@@ -28,9 +28,10 @@ The app is a single module, single package (`com.example.riverdischarge`), split
 - `MainActivity.kt` — the `MainActivity` Activity, `RiverDischargeApp` root (holds all state, switches `HomeScreen` ↔ `EditorScreen`), `HomeScreen`/`SurveyCard`, and `EditorScreen` with its `NavigationBar`.
 - `Model.kt` — all enums (`BankSide`, `BankType`, `VelocityPoint`, `MeasurementMethod`), `*Input` types, parsed/domain types, `ParseState`, `LocalDepthPreview`.
 - `EditorSteps.kt` — the five tab composables (`PassportStep`, `SectionStep`, `VelocityStep`, `BanksStep`, `ResultStep`) plus their sub-editors (`BankSelector`, `SectionPointEditor`, `VelocityEditorCard`).
-- `Charts.kt` — canvas drawings: `SectionProfileCard` (cross-section) and the velocity эпюры (`VelocityProfilesCard`/`VelocityProfileChart`, `buildEpureProfile`, `smoothPathThrough`).
+- `Charts.kt` — canvas drawings: the `DrawScope.draw*Chart` painters plus the cards wrapping them — `SectionProfileCard` (cross-section) and the velocity эпюры (`VelocityProfilesCard`/`VelocityProfileChart`, `buildEpureProfile`, `smoothPathThrough`).
+- `ChartExport.kt` — `renderChartToBitmap` (chart → PNG bitmap), `shareBitmap` (FileProvider + share sheet), `ShareChartButton`, and the fixed-scale machinery (`ExportScale`, `exportScaleFor`, `velocityMetersPerCm`, `ExportChartDensity`).
 - `Components.kt` — generic UI bits (`SimpleDataTable`, `TableRow`, `SegmentCard`, `MetricRow`, `EmptyCard`, `InfoCard`, `ErrorCard`).
-- `Parsing.kt` — `validatePassport`, `parseSection`, `previewLocalDepth`, `parseVelocityStage`, `parseBanks`, `parseSurvey`.
+- `Parsing.kt` — `validatePassport`, `parseSection`, `previewLocalDepth`, `parseVelocityStage`, `parseBanks`, `parseSurvey`, `assembleSurvey`.
 - `Calculation.kt` — `calculateDischarge`, `depthAt`, `integrateArea`.
 - `ClipboardExport.kt` — `copyTextToClipboard` and the `build*ClipboardText` / `buildFullClipboardExport` helpers.
 - `SurveyRepository.kt` — `SurveyRepository` interface + `DataStoreSurveyRepository` (Preferences DataStore + `kotlinx.serialization`), plus a one-time migration from the legacy SharedPreferences blob.
@@ -66,7 +67,12 @@ The app is a single module, single package (`com.example.riverdischarge`), split
 
 **Clipboard export:** `buildFullClipboardExport` and its siblings produce tab-separated text ready to paste into Excel/Google Sheets.
 
+**Charts and image export:** each chart has one painter (`DrawScope.drawSectionProfileChart`, `DrawScope.drawVelocityProfileChart`) used for both the on-screen `Canvas` and the shared PNG, so the two can never drift. On screen the chart fits its box; the exported PNG is a **true-to-scale drawing** — `renderChartToBitmap` sizes the bitmap from the river, not the screen. Width and depth use different scales (~10× vertical exaggeration, as on paper поперечники), graded by wetted width in `exportScaleFor` (1 cm = 2/5/10/20 m across, 0.2/0.5/1/2 m deep); the эпюры reuse the survey's depth scale and grade their velocity axis via `velocityMetersPerCm`. Passing a `depthTickStepM`/`vTickStep` to a painter switches its grid from "quarters of the max" to round 1-cm steps.
+
 **Key conventions:**
 - All user-entered numeric strings go through `String.parseFlexibleDouble()` which replaces commas with dots before parsing.
 - `formatNumber()` rounds to 3 decimal places and trims trailing zeros, always using `Locale.US` for the decimal separator.
-- The canvas-drawn cross-section (`SectionProfileCard`) uses Android `Paint` directly via `nativeCanvas` because Compose doesn't expose text baseline control natively.
+- The chart painters use Android `Paint` directly via `nativeCanvas` because Compose doesn't expose text baseline control natively.
+- **Everything inside a chart painter is sized in `dp`** — text, marker radii, stroke widths, label offsets — never raw px. Exports render through `ExportChartDensity` (a density that models print centimetres), so a hardcoded px size that looks right on screen comes out tiny in the PNG.
+- Chart insets live in the shared `SectionPad*`/`EpurePad*` constants because the export sizes its bitmap as `plot + padding`; changing a painter's padding without them silently clips the axis labels.
+- Axis labels are thinned by measuring text and skipping any that would overlap the previous one (dense profiles have 50+ points). Grid lines are still drawn for every tick.
