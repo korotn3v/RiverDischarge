@@ -99,6 +99,24 @@ internal fun sharedDepthMax(section: SectionData, velocityVerticals: List<Veloci
     return max(sectionMax, verticalMax).coerceAtLeast(0.1)
 }
 
+// Chart insets shared between on-screen drawing and export-bitmap sizing (dp, density-resolved).
+internal val SectionPadLeft = 72.dp
+internal val SectionPadRight = 18.dp
+internal val SectionPadTop = 30.dp
+internal val SectionPadBottom = 64.dp
+internal val EpurePadLeft = 56.dp
+internal val EpurePadRight = 16.dp
+internal val EpurePadTop = 26.dp
+internal val EpurePadBottom = 50.dp
+
+/** Axis tick positions: round multiples of [stepM] when a fixed scale is used, quarters otherwise. */
+private fun axisTicks(maxValue: Double, stepM: Double?): List<Double> =
+    if (stepM != null && stepM > 0.0) {
+        generateSequence(0.0) { it + stepM }.takeWhile { it <= maxValue + 1e-9 }.toList()
+    } else {
+        (0..4).map { maxValue * it / 4.0 }
+    }
+
 internal fun DrawScope.drawSectionProfileChart(
     section: SectionData,
     velocityVerticals: List<VelocityVertical>,
@@ -107,43 +125,47 @@ internal fun DrawScope.drawSectionProfileChart(
     secondary: Color,
     outline: Color,
     surfaceVariant: Color,
-    waterLineColor: Color
+    waterLineColor: Color,
+    depthTickStepM: Double? = null
 ) {
     val profile = section.profilePoints
     val maxDepthValue = maxDepthOverride ?: (profile.maxOfOrNull { it.depth } ?: 1.0).coerceAtLeast(0.1)
     val xMin = section.startEdgeDistance
     val xMax = section.endEdgeDistance
-    val depthTicks = (0..4).map { maxDepthValue * it / 4.0 }
+    val depthTicks = axisTicks(maxDepthValue, depthTickStepM)
     val pointLabels = profile.drop(1).dropLast(1)
 
-    val leftPad = 72.dp.toPx()
-    val rightPad = 18.dp.toPx()
-    val topPad = 30.dp.toPx()
-    val bottomPad = 64.dp.toPx()
+    val leftPad = SectionPadLeft.toPx()
+    val rightPad = SectionPadRight.toPx()
+    val topPad = SectionPadTop.toPx()
+    val bottomPad = SectionPadBottom.toPx()
     val width = size.width - leftPad - rightPad
     val height = size.height - topPad - bottomPad
     val left = leftPad
     val top = topPad
     val bottom = top + height
     val right = left + width
+    // All text/marker sizes are dp-based so the chart keeps its proportions at any density —
+    // both on screen and in the fixed-scale export (whose density models print centimetres).
     val axisPaint = Paint().apply {
         color = android.graphics.Color.argb(255, 90, 90, 90)
-        textSize = 30f
+        textSize = 10.dp.toPx()
         textAlign = Paint.Align.RIGHT
         isAntiAlias = true
     }
     val labelPaint = Paint().apply {
         color = android.graphics.Color.argb(255, 70, 70, 70)
-        textSize = 26f
+        textSize = 9.dp.toPx()
         textAlign = Paint.Align.CENTER
         isAntiAlias = true
     }
     val smallPaint = Paint().apply {
         color = android.graphics.Color.argb(255, 70, 70, 70)
-        textSize = 24f
+        textSize = 8.dp.toPx()
         textAlign = Paint.Align.CENTER
         isAntiAlias = true
     }
+    val labelGap = 4.dp.toPx()
 
     fun mapX(x: Double): Float {
         val ratio = ((x - xMin) / (xMax - xMin)).toFloat().coerceIn(0f, 1f)
@@ -161,30 +183,38 @@ internal fun DrawScope.drawSectionProfileChart(
             color = outline.copy(alpha = 0.35f),
             start = Offset(left, y),
             end = Offset(right, y),
-            strokeWidth = 1.5f
+            strokeWidth = 0.5.dp.toPx()
         )
-        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), left - 10f, y + 8f, axisPaint)
+        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), left - 3.dp.toPx(), y + 3.dp.toPx(), axisPaint)
     }
 
+    // Dense profiles make neighbouring labels collide: draw a label only when it clears the
+    // previous one (grid lines are still drawn for every tick).
     val xTicks = buildList {
         add(section.startEdgeDistance)
         addAll(pointLabels.map { it.distance })
         add(section.endEdgeDistance)
     }
+    var lastLabelEnd = Float.NEGATIVE_INFINITY
     xTicks.forEach { tick ->
         val x = mapX(tick)
         drawLine(
             color = outline.copy(alpha = 0.35f),
             start = Offset(x, top),
             end = Offset(x, bottom),
-            strokeWidth = 1f
+            strokeWidth = 0.4.dp.toPx()
         )
-        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), x, bottom + 28f, labelPaint)
+        val text = formatNumber(tick)
+        val halfW = labelPaint.measureText(text) / 2f
+        if (x - halfW >= lastLabelEnd + labelGap) {
+            drawContext.canvas.nativeCanvas.drawText(text, x, bottom + 9.dp.toPx(), labelPaint)
+            lastLabelEnd = x + halfW
+        }
     }
 
-    drawLine(color = outline, start = Offset(left, top), end = Offset(left, bottom), strokeWidth = 2.5f)
-    drawLine(color = waterLineColor, start = Offset(left, top), end = Offset(right, top), strokeWidth = 2.5f)
-    drawLine(color = outline, start = Offset(left, bottom), end = Offset(right, bottom), strokeWidth = 2.5f)
+    drawLine(color = outline, start = Offset(left, top), end = Offset(left, bottom), strokeWidth = 0.8.dp.toPx())
+    drawLine(color = waterLineColor, start = Offset(left, top), end = Offset(right, top), strokeWidth = 0.8.dp.toPx())
+    drawLine(color = outline, start = Offset(left, bottom), end = Offset(right, bottom), strokeWidth = 0.8.dp.toPx())
 
     val fillPath = Path().apply {
         moveTo(mapX(profile.first().distance), top)
@@ -203,7 +233,7 @@ internal fun DrawScope.drawSectionProfileChart(
             if (index == 0) moveTo(x, y) else lineTo(x, y)
         }
     }
-    drawPath(path = linePath, color = primary, style = Stroke(width = 5f, cap = StrokeCap.Round))
+    drawPath(path = linePath, color = primary, style = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round))
 
     pointLabels.forEachIndexed { index, point ->
         val x = mapX(point.distance)
@@ -212,10 +242,26 @@ internal fun DrawScope.drawSectionProfileChart(
             color = outline.copy(alpha = 0.55f),
             start = Offset(x, top),
             end = Offset(x, y),
-            strokeWidth = 2f
+            strokeWidth = 0.7.dp.toPx()
         )
-        drawCircle(color = primary, radius = 6f, center = Offset(x, y))
-        drawContext.canvas.nativeCanvas.drawText((index + 1).toString(), x, bottom + 56f, smallPaint)
+        drawCircle(color = primary, radius = 2.dp.toPx(), center = Offset(x, y))
+    }
+
+    // Second bottom row — "Урез" at both edges plus point numbers, thinned the same way.
+    val indexRowY = bottom + 18.dp.toPx()
+    lastLabelEnd = Float.NEGATIVE_INFINITY
+    val indexRow = buildList {
+        add(section.startEdgeDistance to "Урез")
+        pointLabels.forEachIndexed { index, point -> add(point.distance to (index + 1).toString()) }
+        add(section.endEdgeDistance to "Урез")
+    }
+    indexRow.forEach { (distance, text) ->
+        val x = mapX(distance)
+        val halfW = smallPaint.measureText(text) / 2f
+        if (x - halfW >= lastLabelEnd + labelGap) {
+            drawContext.canvas.nativeCanvas.drawText(text, x, indexRowY, smallPaint)
+            lastLabelEnd = x + halfW
+        }
     }
 
     velocityVerticals.forEachIndexed { index, vertical ->
@@ -225,18 +271,17 @@ internal fun DrawScope.drawSectionProfileChart(
             color = secondary,
             start = Offset(x, top),
             end = Offset(x, bottomY),
-            strokeWidth = 3f
+            strokeWidth = 1.dp.toPx()
         )
         vertical.measuredDepthOffsets.forEach { offset ->
-            drawCircle(color = secondary, radius = 7f, center = Offset(x, mapY(offset)))
+            drawCircle(color = secondary, radius = 2.3.dp.toPx(), center = Offset(x, mapY(offset)))
         }
-        drawContext.canvas.nativeCanvas.drawText("V${index + 1}", x, top - 8f, smallPaint)
+        drawContext.canvas.nativeCanvas.drawText("V${index + 1}", x, top - 3.dp.toPx(), smallPaint)
     }
 
-    drawContext.canvas.nativeCanvas.drawText("Глубина, м", left - 8f, top - 8f, axisPaint)
-    drawContext.canvas.nativeCanvas.drawText("Расстояния по линейке, м", (left + right) / 2f, size.height - 8f, labelPaint)
-    drawContext.canvas.nativeCanvas.drawText("Урез", mapX(section.startEdgeDistance), bottom + 56f, smallPaint)
-    drawContext.canvas.nativeCanvas.drawText("Урез", mapX(section.endEdgeDistance), bottom + 56f, smallPaint)
+    val axisTitlePaint = Paint(axisPaint).apply { textAlign = Paint.Align.LEFT }
+    drawContext.canvas.nativeCanvas.drawText("Глубина, м", 2.dp.toPx(), top - 3.dp.toPx(), axisTitlePaint)
+    drawContext.canvas.nativeCanvas.drawText("Расстояния по линейке, м", (left + right) / 2f, size.height - 3.dp.toPx(), labelPaint)
 }
 
 @Composable
@@ -250,9 +295,7 @@ internal fun SectionProfileCard(section: SectionData, velocityVerticals: List<Ve
     val surfaceVariant = MaterialTheme.colorScheme.surfaceVariant
     val waterLineColor = MaterialTheme.colorScheme.onSurfaceVariant
     val surface = MaterialTheme.colorScheme.surface
-    val onSurface = MaterialTheme.colorScheme.onSurface
     val context = LocalContext.current
-    val density = LocalDensity.current
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -292,23 +335,30 @@ internal fun SectionProfileCard(section: SectionData, velocityVerticals: List<Ve
             )
 
             ShareChartButton(text = "Поделиться поперечником") {
+                // Fixed physical scale: the plot area is sized from the river itself, so every
+                // exported поперечник of a given width class shares the same метров-в-сантиметре.
+                val exportScale = exportScaleFor(section.wettedWidth)
+                val depthMax = sharedDepthMax(section, velocityVerticals)
+                val plotW = metersToExportPx(section.wettedWidth, exportScale.metersPerCmWidth)
+                val plotH = metersToExportPx(depthMax, exportScale.metersPerCmDepth)
+                val (padW, padH) = with(ExportChartDensity) {
+                    (SectionPadLeft.toPx() + SectionPadRight.toPx()) to (SectionPadTop.toPx() + SectionPadBottom.toPx())
+                }
                 renderChartToBitmap(
-                    density = density,
-                    titleLines = listOf("Поперечное сечение русла"),
-                    chartWidthDp = 360f,
-                    chartHeightDp = 320f,
-                    background = surface,
-                    titleColor = onSurface
+                    chartWidthPx = plotW + padW,
+                    chartHeightPx = plotH + padH,
+                    background = surface
                 ) {
                     drawSectionProfileChart(
                         section = section,
                         velocityVerticals = velocityVerticals,
-                        maxDepthOverride = sharedDepthMax(section, velocityVerticals),
+                        maxDepthOverride = depthMax,
                         primary = primary,
                         secondary = secondary,
                         outline = outline,
                         surfaceVariant = surfaceVariant,
-                        waterLineColor = waterLineColor
+                        waterLineColor = waterLineColor,
+                        depthTickStepM = exportScale.metersPerCmDepth
                     )
                 }.let { bitmap -> shareBitmap(context, bitmap, "poperechnik") }
             }
@@ -408,16 +458,18 @@ internal fun DrawScope.drawVelocityProfileChart(
     primary: Color,
     pointColor: Color,
     outline: Color,
-    waterLineColor: Color
+    waterLineColor: Color,
+    depthTickStepM: Double? = null,
+    vTickStep: Double? = null
 ) {
     val profile = buildEpureProfile(vertical)
-    val depthTicks = (0..4).map { axisDepthMax * it / 4.0 }
-    val vTicks = (0..4).map { vMax * it / 4.0 }
+    val depthTicks = axisTicks(axisDepthMax, depthTickStepM)
+    val vTicks = axisTicks(vMax, vTickStep)
 
-    val leftPad = 56.dp.toPx()
-    val rightPad = 16.dp.toPx()
-    val topPad = 26.dp.toPx()
-    val bottomPad = 50.dp.toPx()
+    val leftPad = EpurePadLeft.toPx()
+    val rightPad = EpurePadRight.toPx()
+    val topPad = EpurePadTop.toPx()
+    val bottomPad = EpurePadBottom.toPx()
     val width = size.width - leftPad - rightPad
     val height = size.height - topPad - bottomPad
     val left = leftPad
@@ -425,18 +477,20 @@ internal fun DrawScope.drawVelocityProfileChart(
     val bottom = top + height
     val right = left + width
 
+    // dp-based sizing — see drawSectionProfileChart.
     val axisPaint = Paint().apply {
         color = android.graphics.Color.argb(255, 90, 90, 90)
-        textSize = 28f
+        textSize = 9.dp.toPx()
         textAlign = Paint.Align.RIGHT
         isAntiAlias = true
     }
     val labelPaint = Paint().apply {
         color = android.graphics.Color.argb(255, 70, 70, 70)
-        textSize = 26f
+        textSize = 9.dp.toPx()
         textAlign = Paint.Align.CENTER
         isAntiAlias = true
     }
+    val labelGap = 4.dp.toPx()
 
     fun mapX(v: Double): Float = left + (v / vMax).toFloat().coerceIn(0f, 1f) * width
     fun mapY(depth: Double): Float = top + (depth / axisDepthMax).toFloat().coerceIn(0f, 1f) * height
@@ -448,36 +502,42 @@ internal fun DrawScope.drawVelocityProfileChart(
             color = outline.copy(alpha = 0.30f),
             start = Offset(left, y),
             end = Offset(right, y),
-            strokeWidth = 1.5f
+            strokeWidth = 0.5.dp.toPx()
         )
-        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), left - 10f, y + 8f, axisPaint)
+        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), left - 3.dp.toPx(), y + 3.dp.toPx(), axisPaint)
     }
-    // Velocity grid + labels along the bottom.
+    // Velocity grid + labels along the bottom, thinned when they would collide.
+    var lastLabelEnd = Float.NEGATIVE_INFINITY
     vTicks.forEach { tick ->
         val x = mapX(tick)
         drawLine(
             color = outline.copy(alpha = 0.30f),
             start = Offset(x, top),
             end = Offset(x, bottom),
-            strokeWidth = 1f
+            strokeWidth = 0.4.dp.toPx()
         )
-        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), x, bottom + 26f, labelPaint)
+        val text = formatNumber(tick)
+        val halfW = labelPaint.measureText(text) / 2f
+        if (x - halfW >= lastLabelEnd + labelGap) {
+            drawContext.canvas.nativeCanvas.drawText(text, x, bottom + 9.dp.toPx(), labelPaint)
+            lastLabelEnd = x + halfW
+        }
     }
 
     // Frame: velocity axis (left), surface line (top), bed line (bottom).
-    drawLine(color = outline, start = Offset(left, top), end = Offset(left, bottom), strokeWidth = 2.5f)
-    drawLine(color = waterLineColor, start = Offset(left, top), end = Offset(right, top), strokeWidth = 2.5f)
-    drawLine(color = outline, start = Offset(left, bottom), end = Offset(right, bottom), strokeWidth = 2.5f)
+    drawLine(color = outline, start = Offset(left, top), end = Offset(left, bottom), strokeWidth = 0.8.dp.toPx())
+    drawLine(color = waterLineColor, start = Offset(left, top), end = Offset(right, top), strokeWidth = 0.8.dp.toPx())
+    drawLine(color = outline, start = Offset(left, bottom), end = Offset(right, bottom), strokeWidth = 0.8.dp.toPx())
 
     val measuredOffsets = profile.measured.map { (depth, v) -> Offset(mapX(v), mapY(depth)) }
 
-    val dashed = PathEffect.dashPathEffect(floatArrayOf(12f, 10f))
+    val dashed = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))
     profile.surfacePoint?.let { (depth, v) ->
         drawLine(
             color = primary.copy(alpha = 0.7f),
             start = Offset(mapX(v), mapY(depth)),
             end = measuredOffsets.first(),
-            strokeWidth = 4f,
+            strokeWidth = 1.3.dp.toPx(),
             pathEffect = dashed
         )
     }
@@ -486,7 +546,7 @@ internal fun DrawScope.drawVelocityProfileChart(
             color = primary.copy(alpha = 0.7f),
             start = measuredOffsets.last(),
             end = Offset(mapX(v), mapY(depth)),
-            strokeWidth = 4f,
+            strokeWidth = 1.3.dp.toPx(),
             pathEffect = dashed
         )
     }
@@ -496,7 +556,7 @@ internal fun DrawScope.drawVelocityProfileChart(
         drawPath(
             path = smoothPathThrough(measuredOffsets),
             color = primary,
-            style = Stroke(width = 5f, cap = StrokeCap.Round)
+            style = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round)
         )
     }
 
@@ -507,18 +567,23 @@ internal fun DrawScope.drawVelocityProfileChart(
             color = pointColor.copy(alpha = 0.45f),
             start = Offset(left, y),
             end = Offset(mapX(v), y),
-            strokeWidth = 2f
+            strokeWidth = 0.7.dp.toPx()
         )
-        drawCircle(color = pointColor, radius = 7f, center = measuredOffsets[i])
+        drawCircle(color = pointColor, radius = 2.3.dp.toPx(), center = measuredOffsets[i])
     }
 
-    drawContext.canvas.nativeCanvas.drawText("h, м", left - 8f, top - 8f, axisPaint)
-    drawContext.canvas.nativeCanvas.drawText("v, м/с", (left + right) / 2f, size.height - 6f, labelPaint)
-    drawContext.canvas.nativeCanvas.drawText("дно", right - 4f, bottom - 8f, labelPaint)
+    val axisTitlePaint = Paint(axisPaint).apply { textAlign = Paint.Align.LEFT }
+    drawContext.canvas.nativeCanvas.drawText("h, м", 2.dp.toPx(), top - 3.dp.toPx(), axisTitlePaint)
+    drawContext.canvas.nativeCanvas.drawText("v, м/с", (left + right) / 2f, size.height - 2.dp.toPx(), labelPaint)
+    drawContext.canvas.nativeCanvas.drawText("дно", right - 2.dp.toPx(), bottom - 3.dp.toPx(), labelPaint)
 }
 
 @Composable
-internal fun VelocityProfilesCard(verticals: List<VelocityVertical>, sectionMaxDepth: Double = 0.0) {
+internal fun VelocityProfilesCard(
+    verticals: List<VelocityVertical>,
+    sectionMaxDepth: Double = 0.0,
+    exportScale: ExportScale = exportScaleFor(0.0)
+) {
     // Shared export scale so every saved эпюра is directly comparable (same depth & velocity axes).
     val exportDepthMax = max(
         sectionMaxDepth,
@@ -539,7 +604,8 @@ internal fun VelocityProfilesCard(verticals: List<VelocityVertical>, sectionMaxD
                     index = index,
                     vertical = vertical,
                     exportDepthMax = exportDepthMax,
-                    exportVMax = exportVMax
+                    exportVMax = exportVMax,
+                    exportScale = exportScale
                 )
             }
         }
@@ -551,7 +617,8 @@ internal fun VelocityProfileChart(
     index: Int,
     vertical: VelocityVertical,
     exportDepthMax: Double,
-    exportVMax: Double
+    exportVMax: Double,
+    exportScale: ExportScale
 ) {
     val profile = buildEpureProfile(vertical)
     val h = vertical.localDepth
@@ -563,9 +630,7 @@ internal fun VelocityProfileChart(
     val outline = MaterialTheme.colorScheme.outline
     val waterLineColor = MaterialTheme.colorScheme.onSurfaceVariant
     val surface = MaterialTheme.colorScheme.surface
-    val onSurface = MaterialTheme.colorScheme.onSurface
     val context = LocalContext.current
-    val density = LocalDensity.current
     val titleLine = "Вертикаль ${index + 1} · x=${formatNumber(vertical.distance)} м · h=${formatNumber(h)} м · Vср=${formatNumber(vertical.meanVelocity)} м/с"
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -595,13 +660,18 @@ internal fun VelocityProfileChart(
             }
         }
         ShareChartButton(text = "Поделиться эпюрой") {
+            // Fixed physical scale shared by all эпюры of the survey: depth uses the same
+            // metres-per-cm as the exported поперечник, velocity gets its own graded scale.
+            val vPerCm = velocityMetersPerCm(exportVMax)
+            val plotW = metersToExportPx(exportVMax, vPerCm)
+            val plotH = metersToExportPx(exportDepthMax, exportScale.metersPerCmDepth)
+            val (padW, padH) = with(ExportChartDensity) {
+                (EpurePadLeft.toPx() + EpurePadRight.toPx()) to (EpurePadTop.toPx() + EpurePadBottom.toPx())
+            }
             renderChartToBitmap(
-                density = density,
-                titleLines = listOf("Эпюра скорости", titleLine),
-                chartWidthDp = 360f,
-                chartHeightDp = 240f,
-                background = surface,
-                titleColor = onSurface
+                chartWidthPx = plotW + padW,
+                chartHeightPx = plotH + padH,
+                background = surface
             ) {
                 drawVelocityProfileChart(
                     vertical = vertical,
@@ -610,7 +680,9 @@ internal fun VelocityProfileChart(
                     primary = primary,
                     pointColor = pointColor,
                     outline = outline,
-                    waterLineColor = waterLineColor
+                    waterLineColor = waterLineColor,
+                    depthTickStepM = exportScale.metersPerCmDepth,
+                    vTickStep = vPerCm
                 )
             }.let { bitmap -> shareBitmap(context, bitmap, "epura_v${index + 1}") }
         }

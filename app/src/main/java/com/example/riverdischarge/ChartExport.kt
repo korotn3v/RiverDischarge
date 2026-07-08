@@ -23,64 +23,75 @@ import java.io.File
 import java.io.FileOutputStream
 
 /** Upscale factor for the exported PNG so vector lines/text stay crisp when zoomed. */
-private const val EXPORT_SCALE = 3f
+private const val EXPORT_SCALE = 6f
+
+/**
+ * Nominal print resolution of the export coordinate space. 1 picture-cm equals [EXPORT_PX_PER_CM]
+ * base px (×[EXPORT_SCALE] in the final bitmap, i.e. 600 dpi when printed at actual size).
+ */
+private const val EXPORT_DPI = 100f
+internal const val EXPORT_PX_PER_CM = EXPORT_DPI / 2.54f
+
+/** Density used for all exported charts, so dp-based paddings are device-independent. */
+internal val ExportChartDensity = Density(EXPORT_DPI / 160f)
+
+/**
+ * Fixed physical scale of an exported chart: metres of river per centimetre of picture.
+ * Width and depth scales differ (classic ~10× vertical exaggeration) for readability.
+ */
+internal data class ExportScale(val metersPerCmWidth: Double, val metersPerCmDepth: Double)
+
+/** Picks one of four scale gradations from the wetted width, so narrow and wide rivers both fit. */
+internal fun exportScaleFor(wettedWidth: Double): ExportScale = when {
+    wettedWidth <= 20.0 -> ExportScale(2.0, 0.2)
+    wettedWidth <= 60.0 -> ExportScale(5.0, 0.5)
+    wettedWidth <= 150.0 -> ExportScale(10.0, 1.0)
+    else -> ExportScale(20.0, 2.0)
+}
+
+/** Velocity-axis scale (m/s per picture-cm) for the эпюры, graded by the survey's max velocity. */
+internal fun velocityMetersPerCm(vMax: Double): Double = when {
+    vMax <= 0.5 -> 0.1
+    vMax <= 1.5 -> 0.25
+    else -> 0.5
+}
+
+/** Metres → export px along a fixed scale axis. */
+internal fun metersToExportPx(meters: Double, metersPerCm: Double): Float =
+    (meters / metersPerCm).toFloat() * EXPORT_PX_PER_CM
 
 /**
  * Renders a chart [draw] block (the same `DrawScope` code the on-screen `Canvas` uses) into a
- * standalone PNG-ready [Bitmap], with an optional [titleLines] header drawn above the chart.
+ * standalone PNG-ready [Bitmap] — just the chart, no caption band.
  *
- * The chart is laid out at [chartWidthDp]×[chartHeightDp] (device-independent, via [density]); the
- * whole bitmap is then drawn through a ×[EXPORT_SCALE] canvas so everything — including the raw-px
- * `nativeCanvas` text inside the chart — scales up uniformly instead of being blurry-upsampled.
+ * The chart is laid out at [chartWidthPx]×[chartHeightPx] in the [ExportChartDensity] coordinate
+ * space (callers size it from the fixed metres-per-cm scale); the whole bitmap is then drawn
+ * through a ×[EXPORT_SCALE] canvas so everything — including the `nativeCanvas` text inside the
+ * chart — scales up uniformly instead of being blurry-upsampled.
  */
 internal fun renderChartToBitmap(
-    density: Density,
-    titleLines: List<String>,
-    chartWidthDp: Float,
-    chartHeightDp: Float,
+    chartWidthPx: Float,
+    chartHeightPx: Float,
     background: Color,
-    titleColor: Color,
     draw: DrawScope.() -> Unit
 ): Bitmap {
-    val widthPx = chartWidthDp * density.density
-    val chartHeightPx = chartHeightDp * density.density
-
-    val titlePaint = Paint().apply {
-        color = titleColor.toArgb()
-        textSize = 30f
-        isAntiAlias = true
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-    }
-    val sidePad = 16f
-    val lineH = titlePaint.fontSpacing
-    val titleH = if (titleLines.isEmpty()) 0f else lineH * titleLines.size + 16f
-    val totalHPx = titleH + chartHeightPx
-
     val bitmap = Bitmap.createBitmap(
-        (widthPx * EXPORT_SCALE).toInt().coerceAtLeast(1),
-        (totalHPx * EXPORT_SCALE).toInt().coerceAtLeast(1),
+        (chartWidthPx * EXPORT_SCALE).toInt().coerceAtLeast(1),
+        (chartHeightPx * EXPORT_SCALE).toInt().coerceAtLeast(1),
         Bitmap.Config.ARGB_8888
     )
     val androidCanvas = AndroidCanvas(bitmap)
     androidCanvas.scale(EXPORT_SCALE, EXPORT_SCALE)
     androidCanvas.drawColor(background.toArgb())
 
-    titleLines.forEachIndexed { i, line ->
-        androidCanvas.drawText(line, sidePad, lineH * (i + 1) - 4f, titlePaint)
-    }
-
-    // Draw the chart below the title band, in its own coordinate space.
-    androidCanvas.save()
-    androidCanvas.translate(0f, titleH)
     val composeCanvas = Canvas(androidCanvas)
     CanvasDrawScope().draw(
-        density = density,
+        density = ExportChartDensity,
         layoutDirection = LayoutDirection.Ltr,
         canvas = composeCanvas,
-        size = Size(widthPx, chartHeightPx),
+        size = Size(chartWidthPx, chartHeightPx),
         block = draw
     )
-    androidCanvas.restore()
     return bitmap
 }
 

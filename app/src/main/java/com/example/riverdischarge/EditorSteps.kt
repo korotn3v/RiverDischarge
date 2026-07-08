@@ -410,9 +410,13 @@ internal fun ResultStep(
             )
         }
         if (velocityState is ParseState.Ok && velocityState.value.isNotEmpty()) {
-            val sectionMaxDepth = (sectionState as? ParseState.Ok)
-                ?.value?.profilePoints?.maxOfOrNull { it.depth } ?: 0.0
-            VelocityProfilesCard(velocityState.value, sectionMaxDepth = sectionMaxDepth)
+            val section = (sectionState as? ParseState.Ok)?.value
+            val sectionMaxDepth = section?.profilePoints?.maxOfOrNull { it.depth } ?: 0.0
+            VelocityProfilesCard(
+                velocityState.value,
+                sectionMaxDepth = sectionMaxDepth,
+                exportScale = exportScaleFor(section?.wettedWidth ?: 0.0)
+            )
         }
         if (velocityState is ParseState.Error) {
             ErrorCard(velocityState.message)
