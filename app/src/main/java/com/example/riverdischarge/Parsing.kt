@@ -154,10 +154,13 @@ internal fun previewLocalDepth(section: SectionData, distanceText: String): Loca
     )
 }
 
-internal fun parseVelocityStage(draft: SurveyDraft): ParseState<List<VelocityVertical>> {
-    val section = when (val parsed = parseSection(draft)) {
-        is ParseState.Ok -> parsed.value
-        is ParseState.Error -> return parsed
+internal fun parseVelocityStage(
+    draft: SurveyDraft,
+    sectionState: ParseState<SectionData> = parseSection(draft)
+): ParseState<List<VelocityVertical>> {
+    val section = when (sectionState) {
+        is ParseState.Ok -> sectionState.value
+        is ParseState.Error -> return sectionState
     }
     if (draft.velocityVerticals.isEmpty()) {
         return ParseState.Error("Добавь хотя бы одну вертикаль скорости.")
@@ -228,17 +231,33 @@ internal fun parseBanks(draft: SurveyDraft): ParseState<BankData> {
 }
 
 internal fun parseSurvey(draft: SurveyDraft): ParseState<ParsedSurvey> {
-    val section = when (val parsed = parseSection(draft)) {
-        is ParseState.Ok -> parsed.value
-        is ParseState.Error -> return parsed
+    val sectionState = parseSection(draft)
+    return assembleSurvey(
+        draft = draft,
+        sectionState = sectionState,
+        velocityState = parseVelocityStage(draft, sectionState),
+        bankState = parseBanks(draft)
+    )
+}
+
+/** Combines already-parsed stages into a [ParsedSurvey] without re-parsing anything. */
+internal fun assembleSurvey(
+    draft: SurveyDraft,
+    sectionState: ParseState<SectionData>,
+    velocityState: ParseState<List<VelocityVertical>>,
+    bankState: ParseState<BankData>
+): ParseState<ParsedSurvey> {
+    val section = when (sectionState) {
+        is ParseState.Ok -> sectionState.value
+        is ParseState.Error -> return sectionState
     }
-    val velocity = when (val parsed = parseVelocityStage(draft)) {
-        is ParseState.Ok -> parsed.value
-        is ParseState.Error -> return parsed
+    val velocity = when (velocityState) {
+        is ParseState.Ok -> velocityState.value
+        is ParseState.Error -> return velocityState
     }
-    val banks = when (val parsed = parseBanks(draft)) {
-        is ParseState.Ok -> parsed.value
-        is ParseState.Error -> return parsed
+    val banks = when (bankState) {
+        is ParseState.Ok -> bankState.value
+        is ParseState.Error -> return bankState
     }
     return ParseState.Ok(
         ParsedSurvey(

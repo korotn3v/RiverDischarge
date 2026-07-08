@@ -59,6 +59,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -131,14 +132,15 @@ fun RiverDischargeApp() {
         )
     } else {
         val draft = currentDraft!!
+        // Each stage is parsed exactly once per draft change; later stages reuse earlier results.
         val sectionState = remember(draft) { parseSection(draft) }
-        val velocityState = remember(draft) { parseVelocityStage(draft) }
+        val velocityState = remember(draft) { parseVelocityStage(draft, sectionState) }
         val bankState = remember(draft) { parseBanks(draft) }
-        val surveyState = remember(draft) { parseSurvey(draft) }
+        val surveyState = remember(draft) { assembleSurvey(draft, sectionState, velocityState, bankState) }
         val calculationState = remember(draft) {
-            when (val survey = parseSurvey(draft)) {
-                is ParseState.Ok -> ParseState.Ok(calculateDischarge(survey.value))
-                is ParseState.Error -> survey
+            when (surveyState) {
+                is ParseState.Ok -> ParseState.Ok(calculateDischarge(surveyState.value))
+                is ParseState.Error -> surveyState
             }
         }
 
@@ -163,9 +165,8 @@ fun RiverDischargeApp() {
                 currentTab = 0
             },
             onSave = {
-                val parsed = parseSurvey(draft)
-                if (parsed is ParseState.Error) {
-                    scope.launch { snackbarHostState.showSnackbar(parsed.message) }
+                if (surveyState is ParseState.Error) {
+                    scope.launch { snackbarHostState.showSnackbar(surveyState.message) }
                 } else {
                     val stamp = System.currentTimeMillis()
                     val toSave = SavedSurvey(
@@ -250,14 +251,17 @@ internal fun HomeScreen(
                 )
             } else {
                 surveys.forEach { survey ->
-                    val parsed = parseSurvey(survey.draft)
-                    val calc = (parsed as? ParseState.Ok)?.let { calculateDischarge(it.value) }
-                    SurveyCard(
-                        survey = survey,
-                        calculation = calc,
-                        onOpen = { onOpenSurvey(survey) },
-                        onDelete = { onDeleteSurvey(survey) }
-                    )
+                    key(survey.id) {
+                        val calc = remember(survey) {
+                            (parseSurvey(survey.draft) as? ParseState.Ok)?.let { calculateDischarge(it.value) }
+                        }
+                        SurveyCard(
+                            survey = survey,
+                            calculation = calc,
+                            onOpen = { onOpenSurvey(survey) },
+                            onDelete = { onDeleteSurvey(survey) }
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(96.dp))
@@ -426,24 +430,34 @@ internal fun EditorScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .imePadding()
-                .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Spacer(modifier = Modifier.height(4.dp))
-            when (safeTab) {
-                0 -> PassportStep(draft, onDraftChange)
-                1 -> SectionStep(draft, sectionState, onDraftChange)
-                2 -> VelocityStep(draft, sectionState, velocityState, onDraftChange)
-                3 -> BanksStep(draft, bankState, onDraftChange)
-                4 -> ResultStep(sectionState, velocityState, bankState, surveyState, calculationState)
+        // Each step owns its scroll container: the list-heavy steps (profile, velocities) use a
+        // LazyColumn so only visible rows are composed; the small steps keep a plain scroll Column.
+        val contentModifier = Modifier
+            .fillMaxSize()
+            .padding(innerPadding)
+            .imePadding()
+        when (safeTab) {
+            0 -> StepColumn(contentModifier) { PassportStep(draft, onDraftChange) }
+            1 -> SectionStep(draft, sectionState, onDraftChange, contentModifier)
+            2 -> VelocityStep(draft, sectionState, velocityState, onDraftChange, contentModifier)
+            3 -> StepColumn(contentModifier) { BanksStep(draft, bankState, onDraftChange) }
+            4 -> StepColumn(contentModifier) {
+                ResultStep(sectionState, velocityState, bankState, surveyState, calculationState)
             }
-            Spacer(modifier = Modifier.height(96.dp))
         }
+    }
+}
+
+@Composable
+internal fun StepColumn(modifier: Modifier, content: @Composable () -> Unit) {
+    Column(
+        modifier = modifier
+            .padding(horizontal = 16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Spacer(modifier = Modifier.height(4.dp))
+        content()
+        Spacer(modifier = Modifier.height(96.dp))
     }
 }
