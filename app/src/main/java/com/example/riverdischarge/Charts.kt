@@ -66,9 +66,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -85,15 +89,159 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
+
+/** Depth axis max shared between the cross-section and the velocity эпюры in the exported images. */
+internal fun sharedDepthMax(section: SectionData, velocityVerticals: List<VelocityVertical>): Double {
+    val sectionMax = section.profilePoints.maxOfOrNull { it.depth } ?: 0.0
+    val verticalMax = velocityVerticals.maxOfOrNull { it.localDepth } ?: 0.0
+    return max(sectionMax, verticalMax).coerceAtLeast(0.1)
+}
+
+internal fun DrawScope.drawSectionProfileChart(
+    section: SectionData,
+    velocityVerticals: List<VelocityVertical>,
+    maxDepthOverride: Double?,
+    primary: Color,
+    secondary: Color,
+    outline: Color,
+    surfaceVariant: Color,
+    waterLineColor: Color
+) {
+    val profile = section.profilePoints
+    val maxDepthValue = maxDepthOverride ?: (profile.maxOfOrNull { it.depth } ?: 1.0).coerceAtLeast(0.1)
+    val xMin = section.startEdgeDistance
+    val xMax = section.endEdgeDistance
+    val depthTicks = (0..4).map { maxDepthValue * it / 4.0 }
+    val pointLabels = profile.drop(1).dropLast(1)
+
+    val leftPad = 72.dp.toPx()
+    val rightPad = 18.dp.toPx()
+    val topPad = 30.dp.toPx()
+    val bottomPad = 64.dp.toPx()
+    val width = size.width - leftPad - rightPad
+    val height = size.height - topPad - bottomPad
+    val left = leftPad
+    val top = topPad
+    val bottom = top + height
+    val right = left + width
+    val axisPaint = Paint().apply {
+        color = android.graphics.Color.argb(255, 90, 90, 90)
+        textSize = 30f
+        textAlign = Paint.Align.RIGHT
+        isAntiAlias = true
+    }
+    val labelPaint = Paint().apply {
+        color = android.graphics.Color.argb(255, 70, 70, 70)
+        textSize = 26f
+        textAlign = Paint.Align.CENTER
+        isAntiAlias = true
+    }
+    val smallPaint = Paint().apply {
+        color = android.graphics.Color.argb(255, 70, 70, 70)
+        textSize = 24f
+        textAlign = Paint.Align.CENTER
+        isAntiAlias = true
+    }
+
+    fun mapX(x: Double): Float {
+        val ratio = ((x - xMin) / (xMax - xMin)).toFloat().coerceIn(0f, 1f)
+        return left + ratio * width
+    }
+
+    fun mapY(depth: Double): Float {
+        val ratio = (depth / maxDepthValue).toFloat().coerceIn(0f, 1f)
+        return top + ratio * height
+    }
+
+    depthTicks.forEach { tick ->
+        val y = mapY(tick)
+        drawLine(
+            color = outline.copy(alpha = 0.35f),
+            start = Offset(left, y),
+            end = Offset(right, y),
+            strokeWidth = 1.5f
+        )
+        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), left - 10f, y + 8f, axisPaint)
+    }
+
+    val xTicks = buildList {
+        add(section.startEdgeDistance)
+        addAll(pointLabels.map { it.distance })
+        add(section.endEdgeDistance)
+    }
+    xTicks.forEach { tick ->
+        val x = mapX(tick)
+        drawLine(
+            color = outline.copy(alpha = 0.35f),
+            start = Offset(x, top),
+            end = Offset(x, bottom),
+            strokeWidth = 1f
+        )
+        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), x, bottom + 28f, labelPaint)
+    }
+
+    drawLine(color = outline, start = Offset(left, top), end = Offset(left, bottom), strokeWidth = 2.5f)
+    drawLine(color = waterLineColor, start = Offset(left, top), end = Offset(right, top), strokeWidth = 2.5f)
+    drawLine(color = outline, start = Offset(left, bottom), end = Offset(right, bottom), strokeWidth = 2.5f)
+
+    val fillPath = Path().apply {
+        moveTo(mapX(profile.first().distance), top)
+        profile.forEach { point ->
+            lineTo(mapX(point.distance), mapY(point.depth))
+        }
+        lineTo(mapX(profile.last().distance), top)
+        close()
+    }
+    drawPath(path = fillPath, color = surfaceVariant.copy(alpha = 0.55f), style = Fill)
+
+    val linePath = Path().apply {
+        profile.forEachIndexed { index, point ->
+            val x = mapX(point.distance)
+            val y = mapY(point.depth)
+            if (index == 0) moveTo(x, y) else lineTo(x, y)
+        }
+    }
+    drawPath(path = linePath, color = primary, style = Stroke(width = 5f, cap = StrokeCap.Round))
+
+    pointLabels.forEachIndexed { index, point ->
+        val x = mapX(point.distance)
+        val y = mapY(point.depth)
+        drawLine(
+            color = outline.copy(alpha = 0.55f),
+            start = Offset(x, top),
+            end = Offset(x, y),
+            strokeWidth = 2f
+        )
+        drawCircle(color = primary, radius = 6f, center = Offset(x, y))
+        drawContext.canvas.nativeCanvas.drawText((index + 1).toString(), x, bottom + 56f, smallPaint)
+    }
+
+    velocityVerticals.forEachIndexed { index, vertical ->
+        val x = mapX(vertical.distance)
+        val bottomY = mapY(vertical.localDepth)
+        drawLine(
+            color = secondary,
+            start = Offset(x, top),
+            end = Offset(x, bottomY),
+            strokeWidth = 3f
+        )
+        vertical.measuredDepthOffsets.forEach { offset ->
+            drawCircle(color = secondary, radius = 7f, center = Offset(x, mapY(offset)))
+        }
+        drawContext.canvas.nativeCanvas.drawText("V${index + 1}", x, top - 8f, smallPaint)
+    }
+
+    drawContext.canvas.nativeCanvas.drawText("Глубина, м", left - 8f, top - 8f, axisPaint)
+    drawContext.canvas.nativeCanvas.drawText("Расстояния по линейке, м", (left + right) / 2f, size.height - 8f, labelPaint)
+    drawContext.canvas.nativeCanvas.drawText("Урез", mapX(section.startEdgeDistance), bottom + 56f, smallPaint)
+    drawContext.canvas.nativeCanvas.drawText("Урез", mapX(section.endEdgeDistance), bottom + 56f, smallPaint)
+}
 
 @Composable
 internal fun SectionProfileCard(section: SectionData, velocityVerticals: List<VelocityVertical>) {
     val profile = section.profilePoints
-    val maxDepthValue = (profile.maxOfOrNull { it.depth } ?: 1.0).coerceAtLeast(0.1)
-    val xMin = section.startEdgeDistance
-    val xMax = section.endEdgeDistance
-    val depthTicks = (0..4).map { maxDepthValue * it / 4.0 }
     val pointLabels = profile.drop(1).dropLast(1)
 
     val primary = MaterialTheme.colorScheme.primary
@@ -101,6 +249,10 @@ internal fun SectionProfileCard(section: SectionData, velocityVerticals: List<Ve
     val outline = MaterialTheme.colorScheme.outline
     val surfaceVariant = MaterialTheme.colorScheme.surfaceVariant
     val waterLineColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val surface = MaterialTheme.colorScheme.surface
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val context = LocalContext.current
+    val density = LocalDensity.current
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -121,127 +273,16 @@ internal fun SectionProfileCard(section: SectionData, velocityVerticals: List<Ve
                     .padding(8.dp)
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    val leftPad = 72.dp.toPx()
-                    val rightPad = 18.dp.toPx()
-                    val topPad = 30.dp.toPx()
-                    val bottomPad = 64.dp.toPx()
-                    val width = size.width - leftPad - rightPad
-                    val height = size.height - topPad - bottomPad
-                    val left = leftPad
-                    val top = topPad
-                    val bottom = top + height
-                    val right = left + width
-                    val axisPaint = Paint().apply {
-                        color = android.graphics.Color.argb(255, 90, 90, 90)
-                        textSize = 30f
-                        textAlign = Paint.Align.RIGHT
-                        isAntiAlias = true
-                    }
-                    val labelPaint = Paint().apply {
-                        color = android.graphics.Color.argb(255, 70, 70, 70)
-                        textSize = 26f
-                        textAlign = Paint.Align.CENTER
-                        isAntiAlias = true
-                    }
-                    val smallPaint = Paint().apply {
-                        color = android.graphics.Color.argb(255, 70, 70, 70)
-                        textSize = 24f
-                        textAlign = Paint.Align.CENTER
-                        isAntiAlias = true
-                    }
-
-                    fun mapX(x: Double): Float {
-                        val ratio = ((x - xMin) / (xMax - xMin)).toFloat().coerceIn(0f, 1f)
-                        return left + ratio * width
-                    }
-
-                    fun mapY(depth: Double): Float {
-                        val ratio = (depth / maxDepthValue).toFloat().coerceIn(0f, 1f)
-                        return top + ratio * height
-                    }
-
-                    depthTicks.forEach { tick ->
-                        val y = mapY(tick)
-                        drawLine(
-                            color = outline.copy(alpha = 0.35f),
-                            start = Offset(left, y),
-                            end = Offset(right, y),
-                            strokeWidth = 1.5f
-                        )
-                        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), left - 10f, y + 8f, axisPaint)
-                    }
-
-                    val xTicks = buildList {
-                        add(section.startEdgeDistance)
-                        addAll(pointLabels.map { it.distance })
-                        add(section.endEdgeDistance)
-                    }
-                    xTicks.forEach { tick ->
-                        val x = mapX(tick)
-                        drawLine(
-                            color = outline.copy(alpha = 0.35f),
-                            start = Offset(x, top),
-                            end = Offset(x, bottom),
-                            strokeWidth = 1f
-                        )
-                        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), x, bottom + 28f, labelPaint)
-                    }
-
-                    drawLine(color = outline, start = Offset(left, top), end = Offset(left, bottom), strokeWidth = 2.5f)
-                    drawLine(color = waterLineColor, start = Offset(left, top), end = Offset(right, top), strokeWidth = 2.5f)
-                    drawLine(color = outline, start = Offset(left, bottom), end = Offset(right, bottom), strokeWidth = 2.5f)
-
-                    val fillPath = Path().apply {
-                        moveTo(mapX(profile.first().distance), top)
-                        profile.forEach { point ->
-                            lineTo(mapX(point.distance), mapY(point.depth))
-                        }
-                        lineTo(mapX(profile.last().distance), top)
-                        close()
-                    }
-                    drawPath(path = fillPath, color = surfaceVariant.copy(alpha = 0.55f), style = Fill)
-
-                    val linePath = Path().apply {
-                        profile.forEachIndexed { index, point ->
-                            val x = mapX(point.distance)
-                            val y = mapY(point.depth)
-                            if (index == 0) moveTo(x, y) else lineTo(x, y)
-                        }
-                    }
-                    drawPath(path = linePath, color = primary, style = Stroke(width = 5f, cap = StrokeCap.Round))
-
-                    pointLabels.forEachIndexed { index, point ->
-                        val x = mapX(point.distance)
-                        val y = mapY(point.depth)
-                        drawLine(
-                            color = outline.copy(alpha = 0.55f),
-                            start = Offset(x, top),
-                            end = Offset(x, y),
-                            strokeWidth = 2f
-                        )
-                        drawCircle(color = primary, radius = 6f, center = Offset(x, y))
-                        drawContext.canvas.nativeCanvas.drawText((index + 1).toString(), x, bottom + 56f, smallPaint)
-                    }
-
-                    velocityVerticals.forEachIndexed { index, vertical ->
-                        val x = mapX(vertical.distance)
-                        val bottomY = mapY(vertical.localDepth)
-                        drawLine(
-                            color = secondary,
-                            start = Offset(x, top),
-                            end = Offset(x, bottomY),
-                            strokeWidth = 3f
-                        )
-                        vertical.measuredDepthOffsets.forEach { offset ->
-                            drawCircle(color = secondary, radius = 7f, center = Offset(x, mapY(offset)))
-                        }
-                        drawContext.canvas.nativeCanvas.drawText("V${index + 1}", x, top - 8f, smallPaint)
-                    }
-
-                    drawContext.canvas.nativeCanvas.drawText("Глубина, м", left - 8f, top - 8f, axisPaint)
-                    drawContext.canvas.nativeCanvas.drawText("Расстояния по линейке, м", (left + right) / 2f, size.height - 8f, labelPaint)
-                    drawContext.canvas.nativeCanvas.drawText("Урез", mapX(section.startEdgeDistance), bottom + 56f, smallPaint)
-                    drawContext.canvas.nativeCanvas.drawText("Урез", mapX(section.endEdgeDistance), bottom + 56f, smallPaint)
+                    drawSectionProfileChart(
+                        section = section,
+                        velocityVerticals = velocityVerticals,
+                        maxDepthOverride = null,
+                        primary = primary,
+                        secondary = secondary,
+                        outline = outline,
+                        surfaceVariant = surfaceVariant,
+                        waterLineColor = waterLineColor
+                    )
                 }
             }
 
@@ -249,6 +290,28 @@ internal fun SectionProfileCard(section: SectionData, velocityVerticals: List<Ve
                 "Схема похожа на полевой поперечник: сверху урез воды, снизу расстояния по линейке, на профиле — точки глубины, а V1, V2… показывают только те вертикали, где реально мерилась скорость.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            ShareChartButton(text = "Поделиться поперечником") {
+                renderChartToBitmap(
+                    density = density,
+                    titleLines = listOf("Поперечное сечение русла"),
+                    chartWidthDp = 360f,
+                    chartHeightDp = 320f,
+                    background = surface,
+                    titleColor = onSurface
+                ) {
+                    drawSectionProfileChart(
+                        section = section,
+                        velocityVerticals = velocityVerticals,
+                        maxDepthOverride = sharedDepthMax(section, velocityVerticals),
+                        primary = primary,
+                        secondary = secondary,
+                        outline = outline,
+                        surfaceVariant = surfaceVariant,
+                        waterLineColor = waterLineColor
+                    )
+                }.let { bitmap -> shareBitmap(context, bitmap, "poperechnik") }
+            }
 
             SimpleDataTable(
                 title = "Точки профиля",
@@ -338,8 +401,132 @@ internal fun smoothPathThrough(points: List<Offset>): Path {
     return path
 }
 
+internal fun DrawScope.drawVelocityProfileChart(
+    vertical: VelocityVertical,
+    axisDepthMax: Double,
+    vMax: Double,
+    primary: Color,
+    pointColor: Color,
+    outline: Color,
+    waterLineColor: Color
+) {
+    val profile = buildEpureProfile(vertical)
+    val depthTicks = (0..4).map { axisDepthMax * it / 4.0 }
+    val vTicks = (0..4).map { vMax * it / 4.0 }
+
+    val leftPad = 56.dp.toPx()
+    val rightPad = 16.dp.toPx()
+    val topPad = 26.dp.toPx()
+    val bottomPad = 50.dp.toPx()
+    val width = size.width - leftPad - rightPad
+    val height = size.height - topPad - bottomPad
+    val left = leftPad
+    val top = topPad
+    val bottom = top + height
+    val right = left + width
+
+    val axisPaint = Paint().apply {
+        color = android.graphics.Color.argb(255, 90, 90, 90)
+        textSize = 28f
+        textAlign = Paint.Align.RIGHT
+        isAntiAlias = true
+    }
+    val labelPaint = Paint().apply {
+        color = android.graphics.Color.argb(255, 70, 70, 70)
+        textSize = 26f
+        textAlign = Paint.Align.CENTER
+        isAntiAlias = true
+    }
+
+    fun mapX(v: Double): Float = left + (v / vMax).toFloat().coerceIn(0f, 1f) * width
+    fun mapY(depth: Double): Float = top + (depth / axisDepthMax).toFloat().coerceIn(0f, 1f) * height
+
+    // Depth grid + labels (0 at surface on top, axisDepthMax at the bed on bottom).
+    depthTicks.forEach { tick ->
+        val y = mapY(tick)
+        drawLine(
+            color = outline.copy(alpha = 0.30f),
+            start = Offset(left, y),
+            end = Offset(right, y),
+            strokeWidth = 1.5f
+        )
+        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), left - 10f, y + 8f, axisPaint)
+    }
+    // Velocity grid + labels along the bottom.
+    vTicks.forEach { tick ->
+        val x = mapX(tick)
+        drawLine(
+            color = outline.copy(alpha = 0.30f),
+            start = Offset(x, top),
+            end = Offset(x, bottom),
+            strokeWidth = 1f
+        )
+        drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), x, bottom + 26f, labelPaint)
+    }
+
+    // Frame: velocity axis (left), surface line (top), bed line (bottom).
+    drawLine(color = outline, start = Offset(left, top), end = Offset(left, bottom), strokeWidth = 2.5f)
+    drawLine(color = waterLineColor, start = Offset(left, top), end = Offset(right, top), strokeWidth = 2.5f)
+    drawLine(color = outline, start = Offset(left, bottom), end = Offset(right, bottom), strokeWidth = 2.5f)
+
+    val measuredOffsets = profile.measured.map { (depth, v) -> Offset(mapX(v), mapY(depth)) }
+
+    val dashed = PathEffect.dashPathEffect(floatArrayOf(12f, 10f))
+    profile.surfacePoint?.let { (depth, v) ->
+        drawLine(
+            color = primary.copy(alpha = 0.7f),
+            start = Offset(mapX(v), mapY(depth)),
+            end = measuredOffsets.first(),
+            strokeWidth = 4f,
+            pathEffect = dashed
+        )
+    }
+    profile.bedPoint?.let { (depth, v) ->
+        drawLine(
+            color = primary.copy(alpha = 0.7f),
+            start = measuredOffsets.last(),
+            end = Offset(mapX(v), mapY(depth)),
+            strokeWidth = 4f,
+            pathEffect = dashed
+        )
+    }
+
+    // Solid smooth curve through the actual readings.
+    if (measuredOffsets.size >= 2) {
+        drawPath(
+            path = smoothPathThrough(measuredOffsets),
+            color = primary,
+            style = Stroke(width = 5f, cap = StrokeCap.Round)
+        )
+    }
+
+    // Each reading: a thin horizontal "velocity stick" from the axis plus the point itself.
+    profile.measured.forEachIndexed { i, (depth, v) ->
+        val y = mapY(depth)
+        drawLine(
+            color = pointColor.copy(alpha = 0.45f),
+            start = Offset(left, y),
+            end = Offset(mapX(v), y),
+            strokeWidth = 2f
+        )
+        drawCircle(color = pointColor, radius = 7f, center = measuredOffsets[i])
+    }
+
+    drawContext.canvas.nativeCanvas.drawText("h, м", left - 8f, top - 8f, axisPaint)
+    drawContext.canvas.nativeCanvas.drawText("v, м/с", (left + right) / 2f, size.height - 6f, labelPaint)
+    drawContext.canvas.nativeCanvas.drawText("дно", right - 4f, bottom - 8f, labelPaint)
+}
+
 @Composable
-internal fun VelocityProfilesCard(verticals: List<VelocityVertical>) {
+internal fun VelocityProfilesCard(verticals: List<VelocityVertical>, sectionMaxDepth: Double = 0.0) {
+    // Shared export scale so every saved эпюра is directly comparable (same depth & velocity axes).
+    val exportDepthMax = max(
+        sectionMaxDepth,
+        verticals.maxOfOrNull { it.localDepth } ?: 0.0
+    ).coerceAtLeast(0.1)
+    val exportVMax = ((verticals.flatMap { it.velocities.values }.maxOrNull() ?: 0.0) * 1.15)
+        .coerceAtLeast(0.05)
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Эпюры скорости", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -348,28 +535,42 @@ internal fun VelocityProfilesCard(verticals: List<VelocityVertical>) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             verticals.forEachIndexed { index, vertical ->
-                VelocityProfileChart(index = index, vertical = vertical)
+                VelocityProfileChart(
+                    index = index,
+                    vertical = vertical,
+                    exportDepthMax = exportDepthMax,
+                    exportVMax = exportVMax
+                )
             }
         }
     }
 }
 
 @Composable
-internal fun VelocityProfileChart(index: Int, vertical: VelocityVertical) {
+internal fun VelocityProfileChart(
+    index: Int,
+    vertical: VelocityVertical,
+    exportDepthMax: Double,
+    exportVMax: Double
+) {
     val profile = buildEpureProfile(vertical)
     val h = vertical.localDepth
+    // On-screen each эпюра auto-scales to itself; the export uses the shared scale passed in.
     val vMax = ((profile.measured.maxOfOrNull { it.second } ?: 0.0) * 1.15).coerceAtLeast(0.05)
-    val depthTicks = (0..4).map { h * it / 4.0 }
-    val vTicks = (0..4).map { vMax * it / 4.0 }
 
     val primary = MaterialTheme.colorScheme.primary
     val pointColor = MaterialTheme.colorScheme.tertiary
     val outline = MaterialTheme.colorScheme.outline
     val waterLineColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val surface = MaterialTheme.colorScheme.surface
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val titleLine = "Вертикаль ${index + 1} · x=${formatNumber(vertical.distance)} м · h=${formatNumber(h)} м · Vср=${formatNumber(vertical.meanVelocity)} м/с"
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            "Вертикаль ${index + 1} · x=${formatNumber(vertical.distance)} м · h=${formatNumber(h)} м · Vср=${formatNumber(vertical.meanVelocity)} м/с",
+            titleLine,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Medium
         )
@@ -382,108 +583,36 @@ internal fun VelocityProfileChart(index: Int, vertical: VelocityVertical) {
                 .padding(8.dp)
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val leftPad = 56.dp.toPx()
-                val rightPad = 16.dp.toPx()
-                val topPad = 26.dp.toPx()
-                val bottomPad = 50.dp.toPx()
-                val width = size.width - leftPad - rightPad
-                val height = size.height - topPad - bottomPad
-                val left = leftPad
-                val top = topPad
-                val bottom = top + height
-                val right = left + width
-
-                val axisPaint = Paint().apply {
-                    color = android.graphics.Color.argb(255, 90, 90, 90)
-                    textSize = 28f
-                    textAlign = Paint.Align.RIGHT
-                    isAntiAlias = true
-                }
-                val labelPaint = Paint().apply {
-                    color = android.graphics.Color.argb(255, 70, 70, 70)
-                    textSize = 26f
-                    textAlign = Paint.Align.CENTER
-                    isAntiAlias = true
-                }
-
-                fun mapX(v: Double): Float = left + (v / vMax).toFloat().coerceIn(0f, 1f) * width
-                fun mapY(depth: Double): Float = top + (depth / h).toFloat().coerceIn(0f, 1f) * height
-
-                // Depth grid + labels (0 at surface on top, h at the bed on bottom).
-                depthTicks.forEach { tick ->
-                    val y = mapY(tick)
-                    drawLine(
-                        color = outline.copy(alpha = 0.30f),
-                        start = Offset(left, y),
-                        end = Offset(right, y),
-                        strokeWidth = 1.5f
-                    )
-                    drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), left - 10f, y + 8f, axisPaint)
-                }
-                // Velocity grid + labels along the bottom.
-                vTicks.forEach { tick ->
-                    val x = mapX(tick)
-                    drawLine(
-                        color = outline.copy(alpha = 0.30f),
-                        start = Offset(x, top),
-                        end = Offset(x, bottom),
-                        strokeWidth = 1f
-                    )
-                    drawContext.canvas.nativeCanvas.drawText(formatNumber(tick), x, bottom + 26f, labelPaint)
-                }
-
-                // Frame: velocity axis (left), surface line (top), bed line (bottom).
-                drawLine(color = outline, start = Offset(left, top), end = Offset(left, bottom), strokeWidth = 2.5f)
-                drawLine(color = waterLineColor, start = Offset(left, top), end = Offset(right, top), strokeWidth = 2.5f)
-                drawLine(color = outline, start = Offset(left, bottom), end = Offset(right, bottom), strokeWidth = 2.5f)
-
-                val measuredOffsets = profile.measured.map { (depth, v) -> Offset(mapX(v), mapY(depth)) }
-
-                val dashed = PathEffect.dashPathEffect(floatArrayOf(12f, 10f))
-                profile.surfacePoint?.let { (depth, v) ->
-                    drawLine(
-                        color = primary.copy(alpha = 0.7f),
-                        start = Offset(mapX(v), mapY(depth)),
-                        end = measuredOffsets.first(),
-                        strokeWidth = 4f,
-                        pathEffect = dashed
-                    )
-                }
-                profile.bedPoint?.let { (depth, v) ->
-                    drawLine(
-                        color = primary.copy(alpha = 0.7f),
-                        start = measuredOffsets.last(),
-                        end = Offset(mapX(v), mapY(depth)),
-                        strokeWidth = 4f,
-                        pathEffect = dashed
-                    )
-                }
-
-                // Solid smooth curve through the actual readings.
-                if (measuredOffsets.size >= 2) {
-                    drawPath(
-                        path = smoothPathThrough(measuredOffsets),
-                        color = primary,
-                        style = Stroke(width = 5f, cap = StrokeCap.Round)
-                    )
-                }
-
-                // Each reading: a thin horizontal "velocity stick" from the axis plus the point itself.
-                profile.measured.forEachIndexed { i, (depth, v) ->
-                    val y = mapY(depth)
-                    drawLine(
-                        color = pointColor.copy(alpha = 0.45f),
-                        start = Offset(left, y),
-                        end = Offset(mapX(v), y),
-                        strokeWidth = 2f
-                    )
-                    drawCircle(color = pointColor, radius = 7f, center = measuredOffsets[i])
-                }
-
-                drawContext.canvas.nativeCanvas.drawText("h, м", left - 8f, top - 8f, axisPaint)
-                drawContext.canvas.nativeCanvas.drawText("v, м/с", (left + right) / 2f, size.height - 6f, labelPaint)
-                drawContext.canvas.nativeCanvas.drawText("дно", right - 4f, bottom - 8f, labelPaint)
+                drawVelocityProfileChart(
+                    vertical = vertical,
+                    axisDepthMax = h,
+                    vMax = vMax,
+                    primary = primary,
+                    pointColor = pointColor,
+                    outline = outline,
+                    waterLineColor = waterLineColor
+                )
             }
+        }
+        ShareChartButton(text = "Поделиться эпюрой") {
+            renderChartToBitmap(
+                density = density,
+                titleLines = listOf("Эпюра скорости", titleLine),
+                chartWidthDp = 360f,
+                chartHeightDp = 240f,
+                background = surface,
+                titleColor = onSurface
+            ) {
+                drawVelocityProfileChart(
+                    vertical = vertical,
+                    axisDepthMax = exportDepthMax,
+                    vMax = exportVMax,
+                    primary = primary,
+                    pointColor = pointColor,
+                    outline = outline,
+                    waterLineColor = waterLineColor
+                )
+            }.let { bitmap -> shareBitmap(context, bitmap, "epura_v${index + 1}") }
         }
     }
 }
