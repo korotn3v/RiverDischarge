@@ -19,6 +19,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
@@ -432,9 +433,12 @@ internal fun EditorScreen(
     ) { innerPadding ->
         // Each step owns its scroll container: the list-heavy steps (profile, velocities) use a
         // LazyColumn so only visible rows are composed; the small steps keep a plain scroll Column.
+        // consumeWindowInsets lets imePadding subtract the bottom-bar padding already applied,
+        // otherwise an empty band the height of the NavigationBar shows above the keyboard.
         val contentModifier = Modifier
             .fillMaxSize()
             .padding(innerPadding)
+            .consumeWindowInsets(innerPadding)
             .imePadding()
         when (safeTab) {
             0 -> StepColumn(contentModifier) { PassportStep(draft, onDraftChange) }
